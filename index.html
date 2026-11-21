@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Notenlesen-Trainer</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#222;--muted:#777;--accent:#2d6cdf;--ok:#2e8b57;--bad:#c0392b;--card:#fff;--line:#999}
+@media(prefers-color-scheme:dark){:root{--bg:#1b1c20;--fg:#eee;--muted:#9a9a9a;--card:#25272d;--line:#aaa}}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--fg);display:flex;justify-content:center;padding:12px}
+main{width:100%;max-width:420px}
+h1{font-size:1.3rem;margin:4px 0 10px}
+.card{background:var(--card);border-radius:14px;padding:12px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+select{font:inherit;padding:6px;border-radius:8px;max-width:100%}
+svg{width:100%;height:auto;display:block}
+.answers{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.oct{display:none;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:6px}
+.oct.show{display:grid}
+.answers button,.oct button{font:inherit;font-size:1.1rem;padding:12px 0;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);cursor:pointer}
+.hot{outline:2px solid var(--accent)}
+.good{background:var(--ok)!important;color:#fff!important;border-color:var(--ok)!important}
+.bad{background:var(--bad)!important;color:#fff!important;border-color:var(--bad)!important;opacity:.85}
+.feedback{min-height:1.6em;font-weight:600;margin:10px 0 6px}
+.feedback.good-t{color:var(--ok)}
+.feedback.bad-t{color:var(--bad)}
+button.primary{font:inherit;background:var(--accent);color:#fff;border:none;padding:10px 16px;border-radius:10px;cursor:pointer;display:none}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);text-align:center;gap:4px}
+.stats b{display:block;font-size:1.2rem}
+.muted{color:var(--muted);font-size:.85rem}
+.linkbtn{font:inherit;margin-top:8px;background:none;border:none;color:var(--muted);text-decoration:underline;cursor:pointer;padding:0}
+</style>
+</head>
+<body>
+<main>
+  <h1>🎼 Notenlesen-Trainer</h1>
+
+  <div class="card">
+    <div class="row">
+      <select id="mode" aria-label="Schlüssel">
+        <option value="treble">Violinschlüssel</option>
+        <option value="bass">Bassschlüssel</option>
+        <option value="mixed">Gemischt</option>
+      </select>
+      <select id="range" aria-label="Tonumfang">
+        <option value="basic">Basis: Linien &amp; Zwischenräume</option>
+        <option value="ext">Erweitert: mit Hilfslinien</option>
+      </select>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label><input type="checkbox" id="octMode"> Oktave auch abfragen</label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label>Weiter nach richtig:
+        <select id="delay" aria-label="Pause nach richtiger Antwort">
+          <option value="400">sehr schnell (0,4 s)</option>
+          <option value="800">normal (0,8 s)</option>
+          <option value="1500">langsam (1,5 s)</option>
+          <option value="0">aus (manuell)</option>
+        </select>
+      </label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label><input type="checkbox" id="sound" checked> Soundeffekt bei richtiger Antwort</label>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="staff"></div>
+    <div class="muted" id="clefLabel" style="text-align:center"></div>
+  </div>
+
+  <div class="card">
+    <div class="answers" id="answers"></div>
+    <div class="oct" id="octs"></div>
+    <div class="feedback" id="fb" aria-live="polite"></div>
+    <button class="primary" id="next">Weiter</button>
+    <div class="muted" style="margin-top:8px">Falsch? Einfach eine andere Taste probieren. Tastatur: C D E F G A H (oder B) · Oktave 2–6 · Enter = weiter. Im Deutschen heißt B „H“.</div>
+  </div>
+
+  <div class="card">
+    <div class="stats">
+      <div><b id="sTot">0</b><span class="muted">Versuche</span></div>
+      <div><b id="sAcc">–</b><span class="muted">Trefferquote</span></div>
+      <div><b id="sStr">0</b><span class="muted">Serie</span></div>
+      <div><b id="sBest">0</b><span class="muted">Beste Serie</span></div>
+    </div>
+    <div class="muted" id="hard" style="margin-top:10px"></div>
+    <button class="linkbtn" id="reset">Statistik zurücksetzen</button>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const LETTERS = ['C','D','E','F','G','A','H'];
+
+// Diatonische Stufen: C4 = 0, D4 = 1, ... B4 = 6, C5 = 7 ...
+function pitch(i){
+  const l = LETTERS[((i % 7) + 7) % 7];
+  const o = 4 + Math.floor(i / 7);
+  return {l, o, key: l + o};
+}
+
+const CLEFS = {
+  treble: {stepOf: i => i - 2,  ranges: {basic: [2, 10],  ext: [0, 12]},   glyph: '𝄞', label: 'Violinschlüssel (G-Schlüssel)'},
+  bass:   {stepOf: i => i + 10, ranges: {basic: [-10, -2], ext: [-14, 0]}, glyph: '𝄢', label: 'Bassschlüssel (F-Schlüssel)'}
+};
+
+// Notensystem als SVG. step 0 = unterste Linie, gerade Stufen = Linien, ungerade = Zwischenräume
+function svgStaff(step, clefKey){
+  const yB = 150, h = 8;
+  const yOf = t => yB - h * t;
+  let g = '';
+  for (let k = 0; k < 5; k++){
+    g += `<line x1="20" x2="280" y1="${yOf(2*k)}" y2="${yOf(2*k)}" stroke="var(--line)" stroke-width="1.5"/>`;
+  }
+  const ledgers = [];
+  if (step < 0)  for (let t = -2; t >= step; t -= 2) ledgers.push(t);
+  if (step > 8)  for (let t = 10; t <= step; t += 2) ledgers.push(t);
+  ledgers.forEach(t => {
+    g += `<line x1="120" x2="180" y1="${yOf(t)}" y2="${yOf(t)}" stroke="var(--line)" stroke-width="1.5"/>`;
+  });
+  const cy = yOf(step);
+  const clef = clefKey === 'treble'
+    ? `<text x="26" y="${yB + 12}" font-size="84" fill="var(--fg)">${CLEFS.treble.glyph}</text>`
+    : `<text x="26" y="${yB - 6}" font-size="58" fill="var(--fg)">${CLEFS.bass.glyph}</text>`;
+  const head = `<ellipse cx="150" cy="${cy}" rx="9" ry="6.5" transform="rotate(-20 150 ${cy})" fill="var(--fg)"/>`;
+  const stem = step <= 4
+    ? `<line x1="158.5" x2="158.5" y1="${cy}" y2="${cy - 40}" stroke="var(--fg)" stroke-width="1.6"/>`
+    : `<line x1="141.5" x2="141.5" y1="${cy}" y2="${cy + 40}" stroke="var(--fg)" stroke-width="1.6"/>`;
+  return `<svg viewBox="0 0 300 200" role="img" aria-label="Notensystem">${g}${clef}${head}${stem}</svg>`;
+}
+
+// Zustand
+let mode = 'treble', range = 'basic', cur = null, locked = false, pending = null;
+let streak = 0, qid = 0, firstDone = false;
+
+function load(key, fallback){
+  try { return JSON.parse(localStorage.getItem(key)) || fallback; }
+  catch(e){ return fallback; }
+}
+function saveTo(key, val){ try { localStorage.setItem(key, JSON.stringify(val)); } catch(e){} }
+
+let data = load('notenTrainer', {total:0, right:0, best:0, notes:{}});
+const prefs = load('notenTrainerPrefs', {delay: 800, sound: true});
+$('delay').value = String(prefs.delay);
+$('sound').checked = !!prefs.sound;
+
+function savePrefs(){
+  prefs.delay = Number($('delay').value);
+  prefs.sound = $('sound').checked;
+  saveTo('notenTrainerPrefs', prefs);
+}
+function save(){ saveTo('notenTrainer', data); }
+
+const octMode = () => $('octMode').checked;
+
+// Kurzer Zweiton-Effekt (aufsteigend), nur bei richtiger Antwort
+let actx = null;
+function playSuccess(){
+  if (!$('sound').checked) return;
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+    const t = actx.currentTime;
+    [659.25, 987.77].forEach((f, i) => {
+      const start = t + i * 0.09;
+      const o = actx.createOscillator();
+      const g = actx.createGain();
+      o.type = 'sine';
+      o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, start);
+      g.gain.exponentialRampToValueAtTime(0.25, start + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
+      o.connect(g).connect(actx.destination);
+      o.start(start);
+      o.stop(start + 0.2);
+    });
+  } catch(e){}
+}
+
+function pool(){
+  const clefs = mode === 'mixed' ? ['treble', 'bass'] : [mode];
+  const arr = [];
+  clefs.forEach(c => {
+    const [lo, hi] = CLEFS[c].ranges[range];
+    for (let i = lo; i <= hi; i++) arr.push({c, i, p: pitch(i)});
+  });
+  return arr;
+}
+
+function pickNext(){
+  const all = pool();
+  // Nie dieselbe Note wie gerade eben: Kandidaten ohne die aktuelle Note
+  const notCur = all.filter(n => !cur || n.p.key !== cur.p.key);
+  const base = notCur.length ? notCur : all;
+  const weak = base.filter(n => { const s = data.notes[n.p.key]; return s && s.seen >= 2 && s.right / s.seen < 0.7; });
+  const list = (weak.length && Math.random() < 0.5) ? weak : base;
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+function setFeedback(text, cls){
+  const fb = $('fb');
+  fb.textContent = text;
+  fb.className = 'feedback' + (cls ? ' ' + cls : '');
+}
+
+function clearHot(){
+  document.querySelectorAll('#answers button, #octs button').forEach(b => b.classList.remove('hot'));
+}
+
+function newQuestion(){
+  cur = pickNext();
+  locked = false;
+  pending = null;
+  firstDone = false;
+  $('staff').innerHTML = svgStaff(CLEFS[cur.c].stepOf(cur.i), cur.c);
+  $('clefLabel').textContent = CLEFS[cur.c].label;
+  setFeedback('');
+  $('next').style.display = 'none';
+  document.querySelectorAll('#answers button, #octs button').forEach(b => b.classList.remove('hot', 'good', 'bad'));
+}
+
+function nextQ(){ qid++; newQuestion(); }
+
+// Statistik nur beim ersten Versuch einer Note zählen
+function recordFirstTry(p, ok){
+  if (firstDone) return;
+  firstDone = true;
+  data.total++;
+  if (ok) data.right++;
+  const s = data.notes[p.key] || (data.notes[p.key] = {seen: 0, right: 0});
+  s.seen++;
+  if (ok) s.right++;
+  streak = ok ? streak + 1 : 0;
+  data.best = Math.max(data.best, streak);
+  save();
+  updateStats();
+}
+
+function answer(letter, oct){
+  if (!cur || locked) return;
+
+  // Oktave-Modus: erst Buchstabe, dann Oktave
+  if (octMode() && oct === undefined){
+    pending = letter;
+    clearHot();
+    document.querySelectorAll(`#answers [data-l="${letter}"]`).forEach(b => b.classList.add('hot'));
+    setFeedback('Jetzt die Oktave wählen.');
+    return;
+  }
+  if (octMode()){
+    if (!pending) return;
+    letter = pending;
+  }
+
+  const p = cur.p;
+  const letterOk = letter === p.l;
+  const ok = letterOk && (!octMode() || oct === p.o);
+
+  // Bereits falsch markierte Taste ignorieren
+  const btn = document.querySelector(`#answers [data-l="${letter}"]`);
+  if (btn && btn.classList.contains('bad') && (!octMode() || oct === undefined)) return;
+
+  recordFirstTry(p, ok);
+
+  if (ok){
+    locked = true;
+    clearHot();
+    if (btn) btn.classList.add('good');
+    if (octMode()){
+      const ob = document.querySelector(`#octs [data-o="${oct}"]`);
+      if (ob) ob.classList.add('good');
+    }
+    setFeedback('Richtig: ' + p.key, 'good-t');
+    playSuccess();
+
+    const delay = Number($('delay').value);
+    if (delay > 0){
+      const t = qid;
+      setTimeout(() => { if (t === qid) nextQ(); }, delay);
+    } else {
+      $('next').style.display = 'inline-block';
+    }
+    return;
+  }
+
+  // Falsch: markieren, aber Versuch weiter erlauben
+  if (octMode() && oct !== undefined){
+    const ob = document.querySelector(`#octs [data-o="${oct}"]`);
+    if (ob) ob.classList.add('bad');
+  }
+  if (btn && !(octMode() && oct === undefined)) btn.classList.add('bad');
+  clearHot();
+  if (octMode() && letterOk){
+    pending = letter; // Buchstabe bleibt, nur Oktave nochmal wählen
+    setFeedback('Buchstabe stimmt – die Oktave nochmal probieren.', 'bad-t');
+  } else {
+    pending = null;
+    setFeedback('Nicht ganz – probier eine andere Note.', 'bad-t');
+  }
+}
+
+function updateStats(){
+  $('sTot').textContent = data.total;
+  $('sAcc').textContent = data.total ? Math.round(100 * data.right / data.total) + '%' : '–';
+  $('sStr').textContent = streak;
+  $('sBest').textContent = data.best;
+  const hard = Object.entries(data.notes)
+    .filter(([k, s]) => s.seen >= 2 && s.right / s.seen < 0.7)
+    .sort((a, b) => a[1].right / a[1].seen - b[1].right / b[1].seen)
+    .slice(0, 5)
+    .map(([k, s]) => `${k} (${Math.round(100 * s.right / s.seen)}%)`);
+  $('hard').textContent = hard.length ? 'Schwierige Noten: ' + hard.join(', ') : 'Noch keine schwierigen Noten – weiter so!';
+}
+
+// Aufbau
+$('answers').innerHTML = LETTERS.map(L => `<button data-l="${L}">${L}</button>`).join('');
+$('octs').innerHTML = [2,3,4,5,6].map(o => `<button data-o="${o}">${o}</button>`).join('');
+
+$('answers').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (b) answer(b.dataset.l);
+});
+$('octs').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b && pending) answer(pending, Number(b.dataset.o));
+});
+$('next').addEventListener('click', nextQ);
+$('mode').addEventListener('change', e => { mode = e.target.value; nextQ(); });
+$('range').addEventListener('change', e => { range = e.target.value; nextQ(); });
+$('octMode').addEventListener('change', () => {
+  $('octs').classList.toggle('show', octMode());
+  nextQ();
+});
+$('delay').addEventListener('change', savePrefs);
+$('sound').addEventListener('change', savePrefs);
+$('reset').addEventListener('click', () => {
+  data = {total: 0, right: 0, best: 0, notes: {}};
+  streak = 0;
+  save();
+  updateStats();
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter'){
+    if (locked){ e.preventDefault(); nextQ(); }
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.toUpperCase();
+  if (k === 'B') answer('H');
+  else if (k.length === 1 && 'CDEFGAH'.includes(k)) answer(k);
+  else if (octMode() && /^[2-6]$/.test(e.key) && pending) answer(pending, Number(e.key));
+});
+
+updateStats();
+nextQ();
+</script>
+</body>
+</html>
