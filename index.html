@@ -25,6 +25,9 @@ svg{width:100%;height:auto;display:block}
 .chapters button{font:inherit;text-align:left;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);cursor:pointer}
 .chapters .stars{color:var(--star);letter-spacing:2px;display:block;margin-top:2px}
 .chapters .acc{color:var(--muted);font-size:.8rem}
+.acc{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px}
+.acc button{font:inherit;font-size:1.2rem;padding:8px 0;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);cursor:pointer}
+.acc button.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .answers{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
 .answers.solf{grid-template-columns:repeat(4,1fr)}
 .oct{display:none;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:6px}
@@ -126,6 +129,10 @@ details summary{cursor:pointer;font-weight:600}
           <option value="basic">im System</option>
           <option value="ext">mit Hilfslinien</option>
         </select>
+        <select id="arcAcc">
+          <option value="0">ohne Vorzeichen</option>
+          <option value="1">mit ♯ und ♭</option>
+        </select>
       </div>
       <div class="row"><button class="primary" id="arcStart">Start</button><span class="muted" id="arcBest"></span></div>
     </div>
@@ -141,6 +148,10 @@ details summary{cursor:pointer;font-weight:600}
         <select id="freeRange">
           <option value="basic">im System</option>
           <option value="ext">mit Hilfslinien</option>
+        </select>
+        <select id="freeAcc">
+          <option value="0">ohne Vorzeichen</option>
+          <option value="1">mit ♯ und ♭</option>
         </select>
       </div>
       <div class="row">
@@ -169,6 +180,7 @@ details summary{cursor:pointer;font-weight:600}
       <div class="muted center" id="clefLabel"></div>
     </div>
     <div class="card">
+      <div class="acc hidden" id="accRow"><button data-a="-1">♭</button><button data-a="0" class="on">♮</button><button data-a="1">♯</button></div>
       <div class="answers" id="answers"></div>
       <div class="oct" id="octs"></div>
       <div class="feedback" id="fb" aria-live="polite"></div>
@@ -176,7 +188,7 @@ details summary{cursor:pointer;font-weight:600}
         <button class="primary hidden" id="next">Weiter</button>
         <button class="ghost" id="quit">Abbrechen</button>
       </div>
-      <div class="muted" style="margin-top:8px">Falsch? Einfach eine andere Taste probieren. Tastatur: Buchstaben C D E F G A H (oder B), Oktave 2–6, Enter = weiter.</div>
+      <div class="muted" style="margin-top:8px">Falsch? Einfach eine andere Taste probieren. Tastatur: Buchstaben C D E F G A H (oder B), Vorzeichen # (♯) und - (♭) vor dem Buchstaben, 0 = ♮, Oktave 2–6, Enter = weiter.</div>
     </div>
   </div>
 
@@ -230,26 +242,45 @@ const savePrefs = () => saveTo('notenTrainerPrefs', prefs);
 
 /* ---------- Noten ---------- */
 // Diatonische Stufen: C4 = 0, D4 = 1, ...
-function pitch(i){
+// acc: -1 = ♭, 0 = ♮, +1 = ♯
+function pitch(i, acc){
+  acc = acc || 0;
   const l = LETTERS[((i % 7) + 7) % 7];
   const o = 4 + Math.floor(i / 7);
-  return {l, o, key: l + o};
+  return {l, o, acc, key: l + (acc > 0 ? '#' : acc < 0 ? 'b' : '') + o};
 }
 const lab = l => NAMES[prefs.names][LETTERS.indexOf(l)];
-const noteName = p => lab(p.l) + p.o;
-const midiOf = p => 12 * (p.o + 1) + OFFSET[p.l];
+function accName(l, acc){
+  if (!acc) return lab(l);
+  if (prefs.names === 'de'){
+    if (acc > 0) return l + 'is';                                   // Cis, Dis, Fis, Gis, Ais
+    return l === 'H' ? 'B' : (l === 'E' || l === 'A') ? l + 's' : l + 'es';   // B, Es, As, Des, Ges
+  }
+  return lab(l) + (acc > 0 ? '♯' : '♭');
+}
+const noteName = p => accName(p.l, p.acc) + p.o;
+function nameFromKey(k){
+  const m = k.match(/^([A-H])([#b]?)(\d)$/);
+  return m ? accName(m[1], m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0) + m[3] : k;
+}
+const midiOf = p => 12 * (p.o + 1) + OFFSET[p.l] + p.acc;
+const pcOf = p => ((midiOf(p) % 12) + 12) % 12;
+const SHARPABLE = ['C','D','F','G','A'], FLATTABLE = ['D','E','G','A','H'];
 
 const CLEFS = {
   treble: {stepOf: i => i - 2,  toI: s => s + 2,  glyph: '𝄞', label: 'Violinschlüssel (G-Schlüssel)'},
   bass:   {stepOf: i => i + 10, toI: s => s - 10, glyph: '𝄢', label: 'Bassschlüssel (F-Schlüssel)'}
 };
 // Notenliste für Schlüssel c, Notensystem-Stufen a..b (0 = unterste Linie, 8 = oberste Linie)
-function mk(c, a, b, pred){
+function mk(c, a, b, pred, accs){
   const out = [];
   for (let s = a; s <= b; s++){
     if (pred && !pred(s)) continue;
     const i = CLEFS[c].toI(s);
+    const l = pitch(i).l;
     out.push({c, i, p: pitch(i)});
+    if (accs && SHARPABLE.includes(l)) out.push({c, i, p: pitch(i, 1)});
+    if (accs && FLATTABLE.includes(l)) out.push({c, i, p: pitch(i, -1)});
   }
   return out;
 }
@@ -266,17 +297,20 @@ const CHAPTERS = [
   {id:'b-staff',  name:'Bass · ganzes System',     pool: () => mk('bass',0,8)},
   {id:'b-ledger', name:'Bass · Hilfslinien',       pool: () => mk('bass',-4,12)},
   {id:'m-staff',  name:'Gemischt · ganzes System', pool: () => mk('treble',0,8).concat(mk('bass',0,8))},
-  {id:'m-ledger', name:'Gemischt · Hilfslinien',   pool: () => mk('treble',-4,12).concat(mk('bass',-4,12))}
+  {id:'m-ledger', name:'Gemischt · Hilfslinien',   pool: () => mk('treble',-4,12).concat(mk('bass',-4,12))},
+  {id:'t-acc',    name:'Violin · ♯ und ♭',         pool: () => mk('treble',0,8,null,true)},
+  {id:'b-acc',    name:'Bass · ♯ und ♭',           pool: () => mk('bass',0,8,null,true)},
+  {id:'m-acc',    name:'Gemischt · ♯ und ♭',       pool: () => mk('treble',0,8,null,true).concat(mk('bass',0,8,null,true))}
 ];
-function poolFor(mode, range){
+function poolFor(mode, range, accs){
   const a = -4, b = 12;
   const lo = range === 'ext' ? a : 0, hi = range === 'ext' ? b : 8;
-  if (mode === 'mixed') return mk('treble',lo,hi).concat(mk('bass',lo,hi));
-  return mk(mode, lo, hi);
+  if (mode === 'mixed') return mk('treble',lo,hi,null,accs).concat(mk('bass',lo,hi,null,accs));
+  return mk(mode, lo, hi, null, accs);
 }
 
 /* ---------- Notensystem (SVG) ---------- */
-function svgStaff(step, clefKey){
+function svgStaff(step, clefKey, acc){
   const yB = 150, h = 8;
   const yOf = t => yB - h * t;
   let g = '';
@@ -297,7 +331,10 @@ function svgStaff(step, clefKey){
   const stem = step <= 4
     ? `<line x1="158.5" x2="158.5" y1="${cy}" y2="${cy - 40}" stroke="var(--fg)" stroke-width="1.6"/>`
     : `<line x1="141.5" x2="141.5" y1="${cy}" y2="${cy + 40}" stroke="var(--fg)" stroke-width="1.6"/>`;
-  return `<svg viewBox="0 0 300 200" role="img" aria-label="Notensystem">${g}${clef}${head}${stem}</svg>`;
+  const accG = acc
+    ? `<text x="119" y="${cy + (acc > 0 ? 11 : 9)}" font-size="34" fill="var(--fg)">${acc > 0 ? '♯' : '♭'}</text>`
+    : '';
+  return `<svg viewBox="0 0 300 200" role="img" aria-label="Notensystem">${g}${clef}${head}${stem}${accG}</svg>`;
 }
 
 /* ---------- Ton ---------- */
@@ -339,7 +376,7 @@ function playFeedback(p){
 
 /* ---------- Spielzustand ---------- */
 let sess = null, cur = null, locked = false, pending = null, firstDone = false;
-let streak = 0, qid = 0, timer = null;
+let streak = 0, qid = 0, timer = null, selAcc = 0, tried = new Set();
 
 function updateStats(){
   $('sTot').textContent = data.total;
@@ -350,7 +387,7 @@ function updateStats(){
     .filter(([k, s]) => s.seen >= 2 && s.right / s.seen < 0.7)
     .sort((a, b) => a[1].right / a[1].seen - b[1].right / b[1].seen)
     .slice(0, 5)
-    .map(([k, s]) => `${lab(k[0])}${k.slice(1)} (${Math.round(100 * s.right / s.seen)}%)`);
+    .map(([k, s]) => `${nameFromKey(k)} (${Math.round(100 * s.right / s.seen)}%)`);
   $('hard').textContent = hard.length ? 'Schwierige Noten: ' + hard.join(', ') : 'Noch keine schwierigen Noten – weiter so!';
 }
 
@@ -410,7 +447,9 @@ function hud(){
 function newQuestion(){
   cur = pickNext();
   locked = false; pending = null; firstDone = false;
-  $('staff').innerHTML = svgStaff(CLEFS[cur.c].stepOf(cur.i), cur.c);
+  selAcc = 0; tried = new Set(); updateAccButtons();
+  $('accRow').classList.toggle('hidden', !sess.hasAcc);
+  $('staff').innerHTML = svgStaff(CLEFS[cur.c].stepOf(cur.i), cur.c, cur.p.acc);
   $('clefLabel').textContent = CLEFS[cur.c].label;
   setFeedback('');
   $('next').classList.add('hidden');
@@ -442,21 +481,27 @@ function recordFirstTry(p, ok){
   }
 }
 
-/* Eine Antwort. oct ist nur bei Mikrofon/MIDI/Oktaven-Tasten gesetzt. */
-function submit(letter, oct){
+function updateAccButtons(){
+  document.querySelectorAll('#accRow button').forEach(b => b.classList.toggle('on', Number(b.dataset.a) === selAcc));
+}
+/* Eine Antwort. oct nur bei Mikrofon/MIDI/Oktaven-Tasten gesetzt, acc sonst die Auswahl (♭ ♮ ♯). */
+function submit(letter, oct, acc){
   if (!sess || !cur || locked) return;
   const p = cur.p;
+  if (acc === undefined) acc = selAcc;
   if (octMode() && oct === undefined){
-    pending = letter;
+    pending = {l: letter, acc: acc};
     clearHot();
     const b = ansBtn(letter); if (b) b.classList.add('hot');
     setFeedback('Jetzt die Oktave wählen.');
     return;
   }
-  const letterOk = letter === p.l;
+  const letterOk = letter === p.l && acc === p.acc;
   const ok = letterOk && (!octMode() || oct === p.o);
+  const tk = letter + ':' + acc + ':' + (octMode() ? oct : '');
+  if (!ok && tried.has(tk)) return;                       // schon probiert
+  tried.add(tk);
   const btn = ansBtn(letter);
-  if (!ok && btn && btn.classList.contains('bad') && !(octMode() && letterOk)) return;   // schon probiert
 
   recordFirstTry(p, ok);
 
@@ -480,12 +525,12 @@ function submit(letter, oct){
   clearHot();
   if (octMode() && letterOk){
     const ob = octBtn(oct); if (ob) ob.classList.add('bad');
-    pending = letter;
-    setFeedback('Buchstabe stimmt – die Oktave nochmal probieren.', 'bad-t');
+    pending = {l: letter, acc: acc};
+    setFeedback('Note stimmt – die Oktave nochmal probieren.', 'bad-t');
   } else {
     if (btn) btn.classList.add('bad');
     pending = null;
-    setFeedback('Nicht ganz – probier eine andere Note.', 'bad-t');
+    setFeedback(letter === p.l ? 'Richtiger Buchstabe, aber das Vorzeichen stimmt nicht.' : 'Nicht ganz – probier eine andere Note.', 'bad-t');
   }
   hud();
 }
@@ -496,6 +541,7 @@ function show(id, on){ $(id).classList.toggle('hidden', !on); }
 function startSession(cfg){
   stopTimer();
   sess = Object.assign({done:0, right:0, score:0, combo:0, startT: performance.now()}, cfg);
+  sess.hasAcc = sess.pool.some(n => n.p.acc);
   cur = null;
   buildAnswers();
   show('menu', false); show('result', false); show('play', true);
@@ -556,7 +602,7 @@ function drillCfg(ch){
 }
 function arcadeCfg(){
   const mode = $('arcMode').value, range = $('arcRange').value;
-  const cfg = {type:'arcade', pool: poolFor(mode, range), time: 60, weighted: true};
+  const cfg = {type:'arcade', pool: poolFor(mode, range, $('arcAcc').value === '1'), time: 60, weighted: true};
   cfg.restart = arcadeCfg;
   return cfg;
 }
@@ -582,7 +628,7 @@ $('chapterList').addEventListener('click', e => {
 });
 $('arcStart').addEventListener('click', () => startSession(arcadeCfg()));
 function freeCfg(){
-  const cfg = {type:'free', pool: poolFor($('freeMode').value, $('freeRange').value),
+  const cfg = {type:'free', pool: poolFor($('freeMode').value, $('freeRange').value, $('freeAcc').value === '1'),
                maxJump: Number($('freeJump').value), weighted: true};
   cfg.restart = freeCfg;
   return cfg;
@@ -594,7 +640,13 @@ $('answers').addEventListener('click', e => {
 });
 $('octs').addEventListener('click', e => {
   const b = e.target.closest('button');
-  if (b && pending) submit(pending, Number(b.dataset.o));
+  if (b && pending) submit(pending.l, Number(b.dataset.o), pending.acc);
+});
+$('accRow').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  selAcc = Number(b.dataset.a);
+  updateAccButtons();
+  document.querySelectorAll('#answers button').forEach(x => x.classList.remove('bad'));
 });
 $('next').addEventListener('click', () => { if (sess) nextQ(); });
 $('quit').addEventListener('click', quit);
@@ -622,7 +674,10 @@ document.addEventListener('keydown', e => {
   const k = e.key.toUpperCase();
   if (k === 'B') submit('H');
   else if (k.length === 1 && 'CDEFGAH'.includes(k)) submit(k);
-  else if (octMode() && /^[2-6]$/.test(e.key) && pending) submit(pending, Number(e.key));
+  else if (octMode() && /^[2-6]$/.test(e.key) && pending) submit(pending.l, Number(e.key), pending.acc);
+  else if (e.key === '#' || e.key === '+'){ selAcc = 1; updateAccButtons(); }
+  else if (e.key === '-'){ selAcc = -1; updateAccButtons(); }
+  else if (e.key === '0'){ selAcc = 0; updateAccButtons(); }
 });
 
 /* ---------- Mikrofon (Tonhöhenerkennung) ---------- */
@@ -672,9 +727,19 @@ function freqToMidi(f){
   return Math.abs(m - r) < 0.4 ? r : -1;
 }
 function submitMidi(n){
-  const k = [0,2,4,5,7,9,11].indexOf(((n % 12) + 12) % 12);
-  if (k < 0) return;                                      // Halbtöne kommen im Training nicht vor
-  submit(LETTERS[k], Math.floor(n / 12) - 1);
+  if (!sess || !cur) return;
+  const p = cur.p;
+  const pc = ((n % 12) + 12) % 12;
+  if (pc === pcOf(p)){
+    // gleiche Tonhöhe wie gefragt: Schreibweise der Aufgabe übernehmen (Fis = Ges)
+    const exact = n === midiOf(p);
+    submit(p.l, (!octMode() || exact) ? p.o : p.o + (n > midiOf(p) ? 1 : -1), p.acc);
+    return;
+  }
+  const nat = [0,2,4,5,7,9,11].indexOf(pc);
+  if (nat >= 0){ submit(LETTERS[nat], Math.floor(n / 12) - 1, 0); return; }
+  if (!sess.hasAcc) return;                               // Halbtöne zählen nur, wenn Vorzeichen trainiert werden
+  submit(LETTERS[[0,2,4,5,7,9,11].indexOf(pc - 1)], Math.floor(n / 12) - 1, 1);
 }
 function micTick(){
   if (!micAn) return;
